@@ -1,5 +1,9 @@
 *
 !.gitignore
+!*.txt
+!*.pl
+!Makefile
+!README
 !*.c
 !*.h
 !*/
