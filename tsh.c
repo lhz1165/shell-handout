@@ -175,7 +175,7 @@ void eval(char *cmdline)
         return;
     }
     if (!builtin_cmd((argv))) {
-        if ((pid = Fork()) == 0) {
+        if ((pid = fork()) == 0) {
             //子进程逻辑
             if (execve(argv[0], argv, environ)<0) {
                 printf("%s: Command not found. \n", argv[0]);
@@ -198,6 +198,8 @@ void eval(char *cmdline)
         }
         struct job_t job= {pid,job_id,job_state,cmdline};
         addjob(&job,pid,FG,cmdline);
+    }else{
+        exit(0);
     }
 }
 
@@ -265,16 +267,34 @@ int parseline(const char *cmdline, char **argv)
 int builtin_cmd(char **argv) 
 {   
     //(quit, jobs, bg or fg)
-    char input = argv[0];
+    char *input = argv[0];
    if (strcmp(input, "quit") == 0) {
+        //退出
         exit(0);
-        
-         return 1;
+        return 1;
     } else if (strcmp(input, "jobs") == 0) {
-
+        //打印任务
+        for (int i = 0; i < nextjid; i++){
+            struct job_t job = jobs[i];
+            if(!job.state==UNDEF){
+                char *stateStr;
+                if (job.state==FG || job.state==BG){
+                    stateStr="Running";
+                }else if (job.state==ST){
+                    stateStr="Stopped";
+                }
+                printf("[%d] (%d) %s %s\n", job.jid, job.pid, stateStr, job.cmdline);
+            }   
+        }
         return 1;
     } else if (strcmp(input, "bg") == 0) {
-         return 1;
+        char *job_id_str = argv[1];
+        job_id_str++;
+        int job_id = atoi(job_id_str); 
+        struct job_t job = jobs[job_id];
+        job.state=BG;
+        printf("[%d] (%d)  %s\n", job.jid, job.pid, job.cmdline);
+        return 1;
     } else if (strcmp(input, "fg") == 0) {
        
         return 1;
