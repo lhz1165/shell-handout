@@ -1,1 +1,6 @@
-myspin
+*
+!.gitignore
+!*.c
+!*.h
+!*/
+
