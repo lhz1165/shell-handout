@@ -176,22 +176,28 @@ void eval(char *cmdline)
     }
     if (!builtin_cmd((argv))) {
         if ((pid = Fork()) == 0) {
+            //子进程逻辑
             if (execve(argv[0], argv, environ)<0) {
                 printf("%s: Command not found. \n", argv[0]);
                 exit(0);
             }
         }
+        int job_id=0;
+        int job_state;
+        //父进程是否等待
         if (!bg) {
+            job_state=FG;
             int status;
             if (waitpid(pid, &status, 0) < 0) {
                 unix_error("waitfg: wait pid error\n");
             } else {
                 printf("%d , %s\n", pid, cmdline);
             }
-
+        }else{
+            job_state=BG;
         }
-
-
+        struct job_t job= {pid,job_id,job_state,cmdline};
+        addjob(&job,pid,FG,cmdline);
     }
 }
 
@@ -257,8 +263,26 @@ int parseline(const char *cmdline, char **argv)
  *    it immediately.  
  */
 int builtin_cmd(char **argv) 
-{
-    return 0;     /* not a builtin command */
+{   
+    //(quit, jobs, bg or fg)
+    char input = argv[0];
+   if (strcmp(input, "quit") == 0) {
+        exit(0);
+        
+         return 1;
+    } else if (strcmp(input, "jobs") == 0) {
+
+        return 1;
+    } else if (strcmp(input, "bg") == 0) {
+         return 1;
+    } else if (strcmp(input, "fg") == 0) {
+       
+        return 1;
+    } else {
+        /* not a builtin command */
+       return 0;
+    }
+       
 }
 
 /* 
@@ -266,6 +290,7 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {
+
     return;
 }
 
@@ -289,7 +314,21 @@ void waitfg(pid_t pid)
  *     currently running children to terminate.  
  */
 void sigchld_handler(int sig) 
-{
+{   
+     int pid;
+     while ((pid = waitpid(-1, NULL, 0)) > 0) { /* Reap a zombie child */
+         
+        struct job_t jp;
+        
+        for(int i = 0; i < MAXJOBS; i++){
+            if (pid==jobs[i].pid){
+                jp=jobs[i];
+                break;
+            }
+        }
+        //确保deletejob原子操作
+        deletejob(&jp,pid);
+     }
     return;
 }
 
@@ -299,7 +338,8 @@ void sigchld_handler(int sig)
  *    to the foreground job.  
  */
 void sigint_handler(int sig) 
-{
+{   
+    exit(0);
     return;
 }
 
@@ -310,6 +350,8 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
+
+
     return;
 }
 
