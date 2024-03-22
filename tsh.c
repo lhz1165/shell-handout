@@ -177,47 +177,49 @@ void eval(char *cmdline)
         return;
     }
 
-    sigset_t mask_all;
-    sigset_t mask_sig; 
-    sigset_t prev_one;
-    sigset_t mask_sigchild;
-    sigemptyset(&mask_sigchild);
-    sigaddset(&mask_sigchild, SIGCHLD);
-
+    sigset_t mask_all, mask_one, prev_one;
     sigfillset(&mask_all);
-    sigemptyset(&mask_sig);
 
-    sigaddset(&mask_sig, SIGTSTP);
-    sigaddset(&mask_sig, SIGINT);
-    sigaddset(&mask_sig, SIGCHLD);
 
-    sigprocmask(SIG_BLOCK, &mask_sig,  &prev_one);
     if (!builtin_cmd((argv))) {
         if ((pid = fork()) == 0) {
-            //子进程逻辑
-            sigprocmask(SIG_SETMASK, &prev_one,  NULL);
+            // 子进程
+            //复原所有信号，不然会和父进程一样阻塞
+            sigprocmask(SIG_SETMASK, &prev_one, NULL);
             if (execve(argv[0], argv, environ)<0) {
                 printf("%s: Command not found. \n", argv[0]);
                 exit(0);
             }
         }else{
-            //1先阻塞所有信号
-            sigprocmask(SIG_BLOCK, &mask_all, NULL); 
             if (!bg) {
                 //子进程前台等待
+
+                //add之后才可以收到child信号删除
+                sigprocmask(SIG_BLOCK, &mask_all, NULL);
+                printf("原子add\n");
                 addjob(jobs,pid,FG,cmdline);
-                //2 add之后才可以收到child信号删除
-                sigprocmask(SIG_SETMASK, &mask_sigchild,  NULL);
+                sigprocmask(SIG_SETMASK, &prev_one, NULL); 
+                
+                
                 int status;
                 if (waitpid(pid, &status, 0) < 0) {
                     unix_error("waitfg: wait pid error\n");
                 }else{
-                     deletejob(jobs,pid);
+                    printf("原子dele\n");
+                    deletejob(jobs,pid);
                 }
             }else{
+                //maskone 只对SIGCHLD
+                sigemptyset(&mask_one);
+                sigaddset(&mask_one, SIGCHLD);
+
+                //父进程阻塞 SIGCHLD
+                sigprocmask(SIG_BLOCK, &mask_one, &prev_one); /* Block SIGCHLD */
                 //子进程后台执行
+                sigprocmask(SIG_BLOCK, &mask_all, NULL);
+                printf("原子add\n");
                 addjob(jobs,pid,BG,cmdline); 
-                sigprocmask(SIG_SETMASK, &mask_sigchild,  NULL);
+                sigprocmask(SIG_SETMASK, &prev_one, NULL); 
             }
         }
     }
@@ -363,9 +365,15 @@ void sigchld_handler(int sig)
 {   
      printf("child exit \n");
      pid_t pid;
+    sigset_t mask_all, prev_all;
+    sigfillset(&mask_all);
      while ((pid = waitpid(-1, NULL, 0)) > 0) { /* Reap a zombie child */
         //确保deletejob原子操作
-        deletejob(jobs,pid);
+        
+    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+    deletejob(jobs,pid);
+    printf("原子删除\n");
+    sigprocmask(SIG_SETMASK, &prev_all, NULL);
      }
     return;
 }
