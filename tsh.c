@@ -22,8 +22,8 @@
 
 /* Job states */
 #define UNDEF 0 /* undefined */
-#define FG 1    /* running in foreground */
 #define BG 2    /* running in background */
+#define FG 1    /* running in foreground */
 #define ST 3    /* stopped */
 
 /* 
@@ -85,6 +85,8 @@ void unix_error(char *msg);
 void app_error(char *msg);
 typedef void handler_t(int);
 handler_t *Signal(int signum, handler_t *handler);
+void printSig();
+void checkSig();
 
 /*
  * main - The shell's main routine 
@@ -181,49 +183,58 @@ void eval(char *cmdline)
     sigfillset(&mask_all);
 
 
+           
+    //父进程阻塞 SIGCHLD
+    sigemptyset(&mask_one);
+    sigaddset(&mask_one, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask_one, &prev_one); 
+
     if (!builtin_cmd((argv))) {
         if ((pid = fork()) == 0) {
-            // 子进程
-            //复原所有信号，不然会和父进程一样阻塞
+                // 子进程
+                //复原所有信号，不然会和父进程一样阻塞
             sigprocmask(SIG_SETMASK, &prev_one, NULL);
+
+            //防止在shell 按下ctr-c 子进程也catch到sigint
+            setpgid(0,0);
+
             if (execve(argv[0], argv, environ)<0) {
                 printf("%s: Command not found. \n", argv[0]);
                 exit(0);
             }
+            exit(0);
         }else{
             if (!bg) {
                 //子进程前台等待
 
-                //add之后才可以收到child信号删除
+                 //add之后才可以收到child信号删除
                 sigprocmask(SIG_BLOCK, &mask_all, NULL);
                 printf("原子add\n");
+                fflush(stdout);
                 addjob(jobs,pid,FG,cmdline);
                 sigprocmask(SIG_SETMASK, &prev_one, NULL); 
-                
-                
-                int status;
-                if (waitpid(pid, &status, 0) < 0) {
-                    unix_error("waitfg: wait pid error\n");
-                }else{
-                    printf("原子dele\n");
-                    deletejob(jobs,pid);
-                }
-            }else{
-                //maskone 只对SIGCHLD
-                sigemptyset(&mask_one);
-                sigaddset(&mask_one, SIGCHLD);
 
-                //父进程阻塞 SIGCHLD
-                sigprocmask(SIG_BLOCK, &mask_one, &prev_one); /* Block SIGCHLD */
+              
+
+                //等待
+                waitfg(pid);
+            }else{
                 //子进程后台执行
                 sigprocmask(SIG_BLOCK, &mask_all, NULL);
                 printf("原子add\n");
+                fflush(stdout);
                 addjob(jobs,pid,BG,cmdline); 
                 sigprocmask(SIG_SETMASK, &prev_one, NULL); 
+
+
+                
             }
         }
+    }else{
+        sigprocmask(SIG_SETMASK, &prev_one, NULL);
     }
 }
+
 
 /* 
  * parseline - Parse the command line and build the argv array.
@@ -290,6 +301,9 @@ int builtin_cmd(char **argv)
 {   
     //(quit, jobs, bg or fg)
     char *input = argv[0];
+    printf("argv[0] = %s\n",input);
+    
+    // printf("argv[1] = %s",argv[1]);
    if (strcmp(input, "quit") == 0) {
         //退出
         exit(0);
@@ -299,42 +313,67 @@ int builtin_cmd(char **argv)
         return 1;
     } else if (strcmp(input, "bg") == 0) {
         //切换到后台
-        char *job_id_str = argv[1];
-        job_id_str++;
-        int job_id = atoi(job_id_str); 
-        struct job_t job = jobs[job_id];
-        job.state=BG;
-        printf("[%d] (%d)  %s\n", job.jid, job.pid, job.cmdline);
+       do_bgfg(argv);
         return 1;
     } else if (strcmp(input, "fg") == 0) {
         //切换到前台
-        char *job_id_str = argv[1];// %1
-        job_id_str++; //1
-        int job_id = atoi(job_id_str); //1
-        struct job_t job = jobs[job_id];
-        job.state=FG;
-        int status;
-        printf("wait pid %d\n", job.pid);
-        if (waitpid(job.pid, &status, 0) < 0)
-        {
-            printf("error %d\n", job.pid);
-        }else{
-            printf("%d %s over\n", job.pid, job.cmdline);
-        }    
+         do_bgfg(argv);
         return 1;
-    } else {
+    } else if (strcmp(input, "&") == 0) {
+        return 1;
+    }else {
         /* not a builtin command */
        return 0;
     }
        
+}
+void printSig(){
+    sigset_t current_mask;
+    int result;
+    int i;
+
+    // 获取当前信号掩码
+    result = sigprocmask(SIG_BLOCK, NULL, &current_mask);
+    if (result == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("阻塞的信号有：\n");
+    // 遍历所有可能的信号
+    for (i = 1; i < NSIG; i++) {
+        // 检查每个信号是否被阻塞
+        if (sigismember(&current_mask, i)) {
+            printf("信号 %d\n", i);
+        }
+    }
 }
 
 /* 
  * do_bgfg - Execute the builtin bg and fg commands
  */
 void do_bgfg(char **argv) 
-{
+{   
 
+    //%1
+    char *job_id_str = argv[1];
+    //1
+    job_id_str++;
+    int job_id = atoi(job_id_str); //1
+
+    //job
+    struct job_t* job=getjobjid(jobs,job_id);
+     kill(-job_id,SIGCONT);
+    // //fg
+     if (strcmp(argv[0], "fg") == 0)
+     {
+        job->state=FG;
+        //等待
+        waitfg(job->pid);
+        
+     }else if (strcmp(argv[0], "bg") == 0){
+        job->state=BG; 
+    }
     return;
 }
 
@@ -343,9 +382,13 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {   
-    int status; 
-    if (waitpid(pid, &status, 0) < 0) { 
-        unix_error("waitfg: waitpid error"); 
+
+    struct job_t *job = getjobpid(jobs,pid);
+    
+    while (pid==fgpid(jobs) && job->state==FG)
+    {
+        printf("wait ...\n");
+        sleep(1);
     }
     return;
 }
@@ -363,18 +406,39 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig) 
 {   
-     printf("child exit \n");
-     pid_t pid;
+    pid_t pid;
+    int status;
     sigset_t mask_all, prev_all;
     sigfillset(&mask_all);
-     while ((pid = waitpid(-1, NULL, 0)) > 0) { /* Reap a zombie child */
-        //确保deletejob原子操作
-        
-    sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
-    deletejob(jobs,pid);
-    printf("原子删除\n");
-    sigprocmask(SIG_SETMASK, &prev_all, NULL);
-     }
+    printf("进入 sigchld_handler\n");
+    while ((pid = waitpid(-1, &status, WNOHANG|WUNTRACED)) > 0) { /* Reap a zombie child */
+
+        if (WIFEXITED(status))
+        {
+            printf("子进程 WIFEXITED  \n");
+            sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+            deletejob(jobs,pid);
+            printf("原子删除\n");
+            sigprocmask(SIG_SETMASK, &prev_all, NULL);
+        }else if (WIFSIGNALED(status))
+        {
+            printf("子进程 WIFSIGNALED  \n");
+            sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
+            deletejob(jobs,pid);
+            printf("原子删除\n");
+            sigprocmask(SIG_SETMASK, &prev_all, NULL);
+        }else if (WIFSTOPPED(status))
+        {
+            printf("子进程 WIFSTOPPED \n");
+            
+            /* code */
+            struct job_t *job = getjobpid(jobs,pid);
+            job->state=ST;
+        }
+        printf("no.....\n");
+        fflush(stdout);  
+    }
+    printf("no children...\n");
     return;
 }
 
@@ -385,7 +449,13 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {   
-    exit(0);
+    printf("进入 sigint_handler\n");
+    pid_t pid = fgpid(jobs);
+    if (pid==0)
+    {
+        return;
+    }
+    kill(-pid, SIGINT);
     return;
 }
 
@@ -396,10 +466,15 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig) 
 {
-
-    printf("\nCtrl+Z pressed. Stopping...\n");
-    // 发送 SIGSTOP 信号给当前进程
-    //kill(getpid(), SIGSTOP);
+    // 发送 SIGSTOP 信号给子进程
+    pid_t pid = fgpid(jobs);
+    if (pid==0)
+    {
+        return;
+    }
+    printf("进入 sigtstp_handler SIGSTOP %d\n",pid);
+    printSig();
+    kill(-pid, SIGTSTP);
     return;
 }
 
@@ -620,6 +695,27 @@ void sigquit_handler(int sig)
 {
     printf("Terminating after receipt of SIGQUIT signal\n");
     exit(1);
+}
+
+void checkSig(){
+     
+    sigset_t current_mask;
+    sigprocmask(SIG_BLOCK, NULL, &current_mask);
+    if (sigismember(&current_mask, SIGCHLD)) {
+        printf("SIGCHLD信号被阻塞\n");
+    } else {
+        printf("SIGCHLD信号未被阻塞\n");
+        
+    }
+
+     if (sigismember(&current_mask, SIGTSTP)) {
+        printf("SIGSTP信号被阻塞\n");
+    } else {
+        printf("SIGSTP信号未被阻塞\n");
+       
+    }
+    fflush(stdout);
+   
 }
 
 
