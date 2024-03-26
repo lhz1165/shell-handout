@@ -179,59 +179,56 @@ void eval(char *cmdline)
         return;
     }
 
-    sigset_t mask_all, mask_one, prev_one;
-    sigfillset(&mask_all);
-
-
-           
-    //父进程阻塞 SIGCHLD
-    sigemptyset(&mask_one);
-    sigaddset(&mask_one, SIGCHLD);
-    sigprocmask(SIG_BLOCK, &mask_one, &prev_one); 
+    
 
     if (!builtin_cmd((argv))) {
         if ((pid = fork()) == 0) {
-                // 子进程
-                //复原所有信号，不然会和父进程一样阻塞
-            sigprocmask(SIG_SETMASK, &prev_one, NULL);
-
             //防止在shell 按下ctr-c 子进程也catch到sigint
             setpgid(0,0);
-
+            //printf("children: ");
+            //checkSig();
             if (execve(argv[0], argv, environ)<0) {
                 printf("%s: Command not found. \n", argv[0]);
                 exit(0);
             }
             exit(0);
         }else{
+            sigset_t mask_all, mask_one, prev_one;
+            sigfillset(&mask_all);
+
+            
+            //父进程阻塞 SIGCHLD
+            sigemptyset(&mask_one);
+            sigaddset(&mask_one, SIGCHLD);
+            sigprocmask(SIG_BLOCK, &mask_one, &prev_one); 
             if (!bg) {
                 //子进程前台等待
 
                  //add之后才可以收到child信号删除
                 sigprocmask(SIG_BLOCK, &mask_all, NULL);
-                printf("原子add\n");
+                //printf("原子add\n");
                 fflush(stdout);
                 addjob(jobs,pid,FG,cmdline);
                 sigprocmask(SIG_SETMASK, &prev_one, NULL); 
 
-              
-
+               // printf("father: ");
+               // checkSig();
                 //等待
                 waitfg(pid);
             }else{
                 //子进程后台执行
                 sigprocmask(SIG_BLOCK, &mask_all, NULL);
-                printf("原子add\n");
-                fflush(stdout);
+                //printf("原子add\n");
+                //fflush(stdout);
                 addjob(jobs,pid,BG,cmdline); 
                 sigprocmask(SIG_SETMASK, &prev_one, NULL); 
+                // checkSig();
 
-
+                struct job_t * job = getjobpid(jobs,pid);
+                printf("[%d] (%d) %s", job->jid, pid,cmdline);
                 
             }
         }
-    }else{
-        sigprocmask(SIG_SETMASK, &prev_one, NULL);
     }
 }
 
@@ -301,8 +298,6 @@ int builtin_cmd(char **argv)
 {   
     //(quit, jobs, bg or fg)
     char *input = argv[0];
-    printf("argv[0] = %s\n",input);
-    
     // printf("argv[1] = %s",argv[1]);
    if (strcmp(input, "quit") == 0) {
         //退出
@@ -327,28 +322,6 @@ int builtin_cmd(char **argv)
     }
        
 }
-void printSig(){
-    sigset_t current_mask;
-    int result;
-    int i;
-
-    // 获取当前信号掩码
-    result = sigprocmask(SIG_BLOCK, NULL, &current_mask);
-    if (result == -1) {
-        perror("sigprocmask");
-        exit(EXIT_FAILURE);
-    }
-
-    printf("阻塞的信号有：\n");
-    // 遍历所有可能的信号
-    for (i = 1; i < NSIG; i++) {
-        // 检查每个信号是否被阻塞
-        if (sigismember(&current_mask, i)) {
-            printf("信号 %d\n", i);
-        }
-    }
-}
-
 /* 
  * do_bgfg - Execute the builtin bg and fg commands
  */
@@ -374,6 +347,8 @@ void do_bgfg(char **argv)
      }else if (strcmp(argv[0], "bg") == 0){
         job->state=BG; 
     }
+   // printf("do_bgfg: ");
+    //checkSig();
     return;
 }
 
@@ -387,7 +362,7 @@ void waitfg(pid_t pid)
     
     while (pid==fgpid(jobs) && job->state==FG)
     {
-        printf("wait ...\n");
+        //printf("wait ...\n");
         sleep(1);
     }
     return;
@@ -410,35 +385,36 @@ void sigchld_handler(int sig)
     int status;
     sigset_t mask_all, prev_all;
     sigfillset(&mask_all);
-    printf("进入 sigchld_handler\n");
+    //printf("进入 sigchld_handler\n");
     while ((pid = waitpid(-1, &status, WNOHANG|WUNTRACED)) > 0) { /* Reap a zombie child */
 
         if (WIFEXITED(status))
         {
-            printf("子进程 WIFEXITED  \n");
+            //printf("子进程 WIFEXITED  \n");
             sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
             deletejob(jobs,pid);
-            printf("原子删除\n");
+            //printf("原子删除\n");
             sigprocmask(SIG_SETMASK, &prev_all, NULL);
         }else if (WIFSIGNALED(status))
         {
-            printf("子进程 WIFSIGNALED  \n");
+            //printf("子进程 WIFSIGNALED  \n");
             sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
             deletejob(jobs,pid);
-            printf("原子删除\n");
+            //printf("原子删除\n");
             sigprocmask(SIG_SETMASK, &prev_all, NULL);
         }else if (WIFSTOPPED(status))
         {
-            printf("子进程 WIFSTOPPED \n");
+            //printf("子进程 WIFSTOPPED \n");
             
             /* code */
             struct job_t *job = getjobpid(jobs,pid);
             job->state=ST;
         }
-        printf("no.....\n");
+        //printf("no.....\n");
         fflush(stdout);  
     }
-    printf("no children...\n");
+    //printf("sigchld_handler: ");
+    //checkSig();
     return;
 }
 
@@ -449,12 +425,15 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig) 
 {   
-    printf("进入 sigint_handler\n");
+    //printf("进入 sigint_handler\n");
+    //
     pid_t pid = fgpid(jobs);
     if (pid==0)
     {
         return;
     }
+    int jid = pid2jid(pid);
+    printf("Job [%d] (%d) terminated by signal 2\n",jid,pid);
     kill(-pid, SIGINT);
     return;
 }
@@ -472,8 +451,10 @@ void sigtstp_handler(int sig)
     {
         return;
     }
-    printf("进入 sigtstp_handler SIGSTOP %d\n",pid);
-    printSig();
+    //printf("进入 sigtstp_handler SIGSTOP %d\n",pid);
+    //printSig();
+    int jid = pid2jid(pid);
+    printf("Job [%d] (%d) stopped by signal 20\n",jid,pid);
     kill(-pid, SIGTSTP);
     return;
 }
@@ -697,6 +678,28 @@ void sigquit_handler(int sig)
     exit(1);
 }
 
+void printSig(){
+    sigset_t current_mask;
+    int result;
+    int i;
+
+    // 获取当前信号掩码
+    result = sigprocmask(SIG_BLOCK, NULL, &current_mask);
+    if (result == -1) {
+        perror("sigprocmask");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("阻塞的信号有：\n");
+    // 遍历所有可能的信号
+    for (i = 1; i < NSIG; i++) {
+        // 检查每个信号是否被阻塞
+        if (sigismember(&current_mask, i)) {
+            printf("信号 %d\n", i);
+        }
+    }
+}
+
 void checkSig(){
      
     sigset_t current_mask;
@@ -714,8 +717,8 @@ void checkSig(){
         printf("SIGSTP信号未被阻塞\n");
        
     }
-    fflush(stdout);
-   
+    printf("-------------\n");
+    fflush(stdout); 
 }
 
 
