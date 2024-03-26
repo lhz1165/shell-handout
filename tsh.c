@@ -298,6 +298,7 @@ int builtin_cmd(char **argv)
 {   
     //(quit, jobs, bg or fg)
     char *input = argv[0];
+    
     // printf("argv[1] = %s",argv[1]);
    if (strcmp(input, "quit") == 0) {
         //退出
@@ -327,24 +328,42 @@ int builtin_cmd(char **argv)
  */
 void do_bgfg(char **argv) 
 {   
-
+    char *fgbg = argv[0];
     //%1
     char *job_id_str = argv[1];
+    
+    
+    if (job_id_str==NULL || job_id_str[0]!='%')
+    {
+        printf("%s command requires PID or %%jobid argument\n",fgbg);
+        fflush(stdout);
+        return;
+    }
     //1
     job_id_str++;
     int job_id = atoi(job_id_str); //1
 
     //job
     struct job_t* job=getjobjid(jobs,job_id);
+    if (job==NULL||job->state==UNDEF)
+    {
+        printf("%%%d: No such job\n",job_id);
+        fflush(stdout);
+        /* code */
+        return;
+    }
+    
      kill(-job_id,SIGCONT);
     // //fg
-     if (strcmp(argv[0], "fg") == 0)
+     if (strcmp(fgbg, "fg") == 0)
      {
         job->state=FG;
+        //printf("[%d] (%d) %s ",job->jid,job->pid,job->cmdline);
         //等待
         waitfg(job->pid);
         
-     }else if (strcmp(argv[0], "bg") == 0){
+     }else if (strcmp(fgbg, "bg") == 0){
+        printf("[%d] (%d) %s ",job->jid,job->pid,job->cmdline);
         job->state=BG; 
     }
    // printf("do_bgfg: ");
@@ -387,7 +406,8 @@ void sigchld_handler(int sig)
     sigfillset(&mask_all);
     //printf("进入 sigchld_handler\n");
     while ((pid = waitpid(-1, &status, WNOHANG|WUNTRACED)) > 0) { /* Reap a zombie child */
-
+        int jid = pid2jid(pid);
+        //正常退出
         if (WIFEXITED(status))
         {
             //printf("子进程 WIFEXITED  \n");
@@ -395,8 +415,10 @@ void sigchld_handler(int sig)
             deletejob(jobs,pid);
             //printf("原子删除\n");
             sigprocmask(SIG_SETMASK, &prev_all, NULL);
+            //sigint 而中断
         }else if (WIFSIGNALED(status))
         {
+             printf("Job [%d] (%d) terminated by signal 2\n",jid,pid);
             //printf("子进程 WIFSIGNALED  \n");
             sigprocmask(SIG_BLOCK, &mask_all, &prev_all);
             deletejob(jobs,pid);
@@ -407,6 +429,7 @@ void sigchld_handler(int sig)
             //printf("子进程 WIFSTOPPED \n");
             
             /* code */
+            printf("Job [%d] (%d) stopped by signal 20\n",jid,pid);
             struct job_t *job = getjobpid(jobs,pid);
             job->state=ST;
         }
@@ -432,8 +455,6 @@ void sigint_handler(int sig)
     {
         return;
     }
-    int jid = pid2jid(pid);
-    printf("Job [%d] (%d) terminated by signal 2\n",jid,pid);
     kill(-pid, SIGINT);
     return;
 }
@@ -453,8 +474,7 @@ void sigtstp_handler(int sig)
     }
     //printf("进入 sigtstp_handler SIGSTOP %d\n",pid);
     //printSig();
-    int jid = pid2jid(pid);
-    printf("Job [%d] (%d) stopped by signal 20\n",jid,pid);
+ 
     kill(-pid, SIGTSTP);
     return;
 }
